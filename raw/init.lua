@@ -1,14 +1,16 @@
 function findDevilFruitPlant()
     local plants=df.global.world.raws.plants
-    local nums={'bushes'={},'trees'={},'grasses'={}}
-    for k,v in ipairs(nums) do
-        v['min'],v['max']=plants[k..'_idx'][0],plants[k..'_idx'][#plants[k..'_idx']]
+    local nums={bushes={},trees={},grasses={}}
+    for k,v in pairs(nums) do
+        v.min,v.max=plants[k..'_idx'][0],plants[k..'_idx'][#plants[k..'_idx']-1]
     end
     if nums.trees.min-nums.bushes.max<2 then devilFruitPlant=plants.all[nums.trees.min-1]
     elseif nums.bushes.min-nums.grasses.max<2 then devilFruitPlant=plants.all[nums.bushes.min-1] 
     else devilFruitPlant=plants.all[nums.grasses.min-1]
     end
-    if not devilFruitPlant['id']:find('DEVIL_FRUIT') then
+    if devilFruitPlant['id']:find('DEVIL_FRUIT') then
+        return devilFruitPlant
+    else
         for k,v in ipairs(df.global.world.raws.plants.all) do
             if v['id']:find('DEVIL_FRUIT') then return v,k end
         end
@@ -99,23 +101,28 @@ end]]
 
 function calculateImportanceOfPosition(link)
     local entity=df.historical_entity.find(link.entity_id)
-    return math.ceil(10000/df.entity_raw.find(entity.type).positions[entity.positions.assignments[link.assignment_id].position_id].precedence)
+    local entityRaw=df.entity_raw.find(entity.type)
+    local posId=entity.positions.assignments[link.assignment_id].position_id
+    if #entityRaw.positions-1<posId then return 0 end
+    local position=entityRaw.positions[posId]
+    return math.ceil(10/math.log(position.precedence/50+1))
 end
 
 function calculateImportance(fig)
     local importance=0
-    if v.info then
+    if fig.info and fig.info.kills then
         for k,v in ipairs(fig.info.kills.killed_count) do
             importance=v+importance
         end
         importance=importance+(#fig.info.kills.events*5)
     end
     for k,link in ipairs(fig.entity_links) do
-        if histfig_entity_link_enemyst:is_instance(link) then importance=math.ceil(link.link_strength/10)+importance end
-        if histfig_entity_link_criminalst:is_instance(link) then importance=math.ceil(link.link_strength/5)+importance end
-        if histfig_entity_link_former_prisonerst:is_instance(link) then importance=importance+math.ceil(link.link_strength/10) end
-        if histfig_entity_link_positionst:is_instance(link) then importance=importance+calculateImportanceOfPosition(link) end
+        if df.histfig_entity_link_enemyst:is_instance(link) then importance=math.ceil(link.link_strength/10)+importance end
+        if df.histfig_entity_link_criminalst:is_instance(link) then importance=math.ceil(link.link_strength/5)+importance end
+        if df.histfig_entity_link_former_prisonerst:is_instance(link) then importance=importance+math.ceil(link.link_strength/10) end
+        if df.histfig_entity_link_positionst:is_instance(link) then importance=importance+calculateImportanceOfPosition(link) end
     end
+    return importance
 end
 
 function shuffle(tab)
@@ -132,23 +139,28 @@ function assignDevilFruitUser(shuffledTable,number,fig)
     local fruit = shuffledTable[number]
     local persistentID='DEVIL_FRUIT/'..fruit.id
     if not dfhack.persistent.get(persistentID) then
-		local matInfoFind=dfhack.matinfo.find(devilFruitPlant.id,fruit.id)
+        local matInfoFind=dfhack.matinfo.find(devilFruitPlant.id..':'..fruit.id)
         dfhack.persistent.save({key='DEVIL_FRUIT/'..fruit.id,value=devilFruitPlant.id..':'..fruit.id,ints={fig.unit_id,matInfoFind.type,matInfoFind.subtype}})
     end
 end
 
 function assignDevilFruitUsersOnImportance()
     if dfhack.persistent.get_all('DEVIL_FRUIT',true) then return false end
-    local importantFigures={{fig=nil,importance=nil}}
+    local importantFigures={}
     for k,fig in ipairs(df.global.world.history.figures) do
-        if df.creature_raw.find(fig.race).creature_id:find('HUMAN') then
-            table.insert(importantFigures,{fig=fig,importance=calculateImportance(fig)})
+        local creatureRaw=df.creature_raw.find(fig.race)
+        if fig.died_year==-1 and (creatureRaw and creatureRaw.creature_id:find('HUMAN')) then
+            local importance=calculateImportance(fig)
+            if importance and importance>0 then
+                table.insert(importantFigures,{fig,importance})
+            end
         end
     end
     table.sort(importantFigures,function(a,b) return a[2]>b[2] end)
-	local shuffledDevilFruitPlant=shuffle(devilFruitPlant.material)
+    local shuffledDevilFruitPlant=shuffle(devilFruitPlant.material)
     for k,v in ipairs(importantFigures) do
-        assignDevilFruitUser(shuffledDevilFruitPlant,k,v['fig'])
+        if not shuffledDevilFruitPlant[k] then return true end
+        assignDevilFruitUser(shuffledDevilFruitPlant,k,v[1])
     end
 end
 
@@ -162,7 +174,7 @@ function onUnitSpawnLoop()
         end
     end
     dfhack.timeout_active(onUnitSpawnTimeout,nil)
-    onUnitSpawnTimeout=dfhack.timeout(10,'ticks',onUnitSpawnLoop())
+    onUnitSpawnTimeout=dfhack.timeout(10,'ticks',onUnitSpawnLoop)
 end
 
 local function assignSyndrome(target,syn_id) --taken straight from here, but edited so I can understand it better: https://gist.github.com/warmist/4061959/. Also implemented expwnent's changes for compatibility with syndromeTrigger.
@@ -198,12 +210,12 @@ end
 onUnitSpawn['onePiece']=function(unit_id)
     for k,v in ipairs(dfhack.persistent.get_all('DEVIL_FRUIT',true)) do
         if v.ints[1]==unit_id then
-			local unit=df.unit.find(unit_id)
-			local mat=df.matinfo.decode(v.ints[2],v.ints[3]).material
-			for k,v in ipairs(mat.syndrome) do
-				assignSyndrome(unit,v.type)
-			end
-		end
+            local unit=df.unit.find(unit_id)
+            local mat=df.matinfo.decode(v.ints[2],v.ints[3]).material
+            for k,v in ipairs(mat.syndrome) do
+                assignSyndrome(unit,v.type)
+            end
+        end
     end
 end
 
@@ -212,6 +224,8 @@ dfhack.onStateChange['onePiece']=function(code)
         numUnitsBeforeCheck=0
         devilFruitPlant,devilFruitPlantKey=findDevilFruitPlant() 
         assignDevilFruitUsersOnImportance()
+    end
+    if code==SC_MAP_LOADED then
         onUnitSpawnLoop()
     end
 end

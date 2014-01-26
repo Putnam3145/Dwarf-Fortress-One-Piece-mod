@@ -1,0 +1,9 @@
+item_ammo_onepiece
+
+[OBJECT:ITEM]
+
+[ITEM_AMMO:ITEM_AMMO_PELLET_ONEPIECE]
+	[NAME:pellet:pellets]
+	[CLASS:PELLET]
+	[SIZE:10]
+	[ATTACK:BLUNT:2:2000:flick-and-catch:flicks-and-catches:NO_SUB:1000]
